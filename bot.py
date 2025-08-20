@@ -121,11 +121,19 @@ def create_youtube_video_embed(video):
     return embed
 
 # -------------------------
-# YouTube Music Helper (Fixed)
+# YouTube Music Helper (with ENV variable)
 # -------------------------
 async def fetch_latest_ytmusic_release():
     global last_ytmusic_release
-    YOUTUBE_RELEASES_URL = "https://www.youtube.com/channel/UC2M3qP1SHMAOhrYThLwiJPw/releases"
+
+    # Load YT Music channel ID from env
+    YTMUSIC_CHANNEL_ID = os.getenv("YTMUSIC_CHANNEL_ID")
+    if not YTMUSIC_CHANNEL_ID:
+        print("❌ Missing YTMUSIC_CHANNEL_ID in Railway Variables!")
+        return None
+
+    # Construct releases URL dynamically
+    YOUTUBE_RELEASES_URL = f"https://www.youtube.com/channel/{YTMUSIC_CHANNEL_ID}/releases"
 
     class SilentLogger:
         def debug(self, msg): pass
@@ -195,7 +203,6 @@ async def check_youtube_music_releases(bot):
             text="Powered by YouTube Music 🎧",
             icon_url="https://cdn-icons-png.flaticon.com/512/1384/1384060.png"
         )
-        # Send the mention + embed
         await channel.send(content=ROLE_MENTION, embed=embed)
         print(f"✅ Posted new release: {title} by {artist}")
     else:
