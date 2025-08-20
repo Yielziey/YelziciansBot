@@ -346,16 +346,25 @@ async def check_youtube_music():
         release = await fetch_latest_ytmusic_release()
         if release:
             url, title, artist = release
-            channel = discord.utils.get(bot.get_all_channels(), name="yt-release")
+
+            # Gumamit na tayo ng channel ID galing ENV
+            channel_id = os.getenv("YTMUSIC_ANNOUNCEMENT_CHANNEL_ID")
+            if not channel_id:
+                print("❌ Missing YTMUSIC_ANNOUNCEMENT_CHANNEL_ID in Railway Variables!")
+                return
+
+            channel = bot.get_channel(int(channel_id))
             if channel:
                 await channel.send(
                     f"🎶 **New Release**: **{title}** by **{artist}**\n🔗 {url}"
                 )
-            print(f"✅ Posted new release: {title}")
+                print(f"✅ Posted new release: {title} by {artist} → {channel.name}")
+            else:
+                print(f"❌ Channel with ID {channel_id} not found. Check if bot has access.")
         else:
             print("ℹ️ No new releases found this time.")
+            print("👉 YTMUSIC_CHANNEL_ID =", os.getenv("YTMUSIC_CHANNEL_ID"))
     except Exception as e:
-        # Hindi na babagsak yung loop dito
         print(f"❌ Error in check_youtube_music loop: {e}")
 
 
