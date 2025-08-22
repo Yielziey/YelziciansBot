@@ -1,25 +1,32 @@
-# Use Python 3.12 slim image
+# Base image
 FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y ffmpeg git curl wget && \
-    rm -rf /var/lib/apt/lists/*
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app files
+# Copy all project files
 COPY . .
 
-# Expose port if needed (optional)
+# Expose port for Railway health checks (optional)
 EXPOSE 8080
 
-# Run the bot
+# Environment variables (can override in Railway)
+ENV DISCORD_TOKEN=""
+ENV SPOTIFY_CLIENT_ID=""
+ENV SPOTIFY_CLIENT_SECRET=""
+ENV YOUTUBE_API_KEY=""
+ENV YOUTUBE_API_CHANNEL_ID=""
+
+# Command to run the bot
 CMD ["python", "bot.py"]
