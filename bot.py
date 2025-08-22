@@ -132,13 +132,27 @@ async def search(ctx, *, artist_name):
 
 # --- Lyrics
 @bot.command()
-async def lyrics(ctx, *, song_name):
+async def lyrics(ctx, *, query: str):
+    """
+    Usage: !lyrics <artist> - <song>
+    Example: !lyrics Adele - Hello
+    """
     await ctx.defer()
-    lyrics_text = await fetch_lyrics(song_name)
+    # Parse artist and song
+    if "-" in query:
+        artist_name, song_name = map(str.strip, query.split("-", 1))
+    else:
+        artist_name = None
+        song_name = query.strip()
+
+    lyrics_text = await fetch_lyrics(song_name, artist_name)
+    if lyrics_text.startswith("❌"):
+        return await ctx.send(lyrics_text)
+
     pages = paginate_lyrics(lyrics_text)
-    embed = create_lyrics_embed(song_name, pages[0], 1, len(pages))
-    view = LyricsPaginator(ctx, song_name, pages)
-    await ctx.send(embed=embed, view=view)
+    view = LyricsPaginator(ctx, song_name, artist_name, pages)
+    await view.update_message()
+
 
 # --- AI
 @bot.command(name="ask")
@@ -146,9 +160,8 @@ async def ask(ctx, *, question):
     await ctx.defer()
     answer = await ask_gpt(question)
     pages = paginate_text(answer)
-    embed = create_ai_embed(question, pages[0], 1, len(pages))
     view = AIPaginator(ctx, question, pages)
-    await ctx.send(embed=embed, view=view)
+    await view.update_message()  # sends the first message
 
 # --- Help
 @bot.command(name="help")
