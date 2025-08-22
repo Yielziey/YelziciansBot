@@ -8,7 +8,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python packages
@@ -18,8 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy bot files
 COPY . .
 
-# Expose port (optional, for health checks if needed)
+# Expose port (optional, if you plan health checks or web)
 EXPOSE 8080
 
-# Command to run the bot
+# Run the bot
 CMD ["python", "bot.py"]

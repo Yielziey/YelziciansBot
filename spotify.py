@@ -20,6 +20,7 @@ def get_spotify_token():
 
 
 def get_latest_albums(artist_id, token, limit=5):
+    """Get latest albums with at least 3 tracks."""
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"include_groups": "album,single", "limit": limit*2, "market": "US"}
@@ -41,32 +42,42 @@ def get_latest_albums(artist_id, token, limit=5):
     return latest_albums
 
 
-def create_spotify_artist_embed(artist_data, top_tracks, latest_albums):
-    from bot import ROLE_MENTION
+def create_spotify_artist_embed(artist_data, top_tracks, latest_albums, role_mention="<@&1407630846294491168>"):
+    """Create a rich Discord embed for Spotify artist search."""
     embed = discord.Embed(
         title=artist_data.get("name", "Artist"),
         url=artist_data.get("external_urls", {}).get("spotify"),
-        description=f"{ROLE_MENTION}\n🎵 Discover this artist on Spotify!",
+        description=f"{role_mention}\n🎵 Discover this artist on Spotify!",
         color=0x1DB954
     )
+
+    # Artist image
     if artist_data.get("images"):
         embed.set_thumbnail(url=artist_data["images"][0]["url"])
+
+    # Followers and genres
     embed.add_field(name="👥 Followers", value=f"{artist_data.get('followers', {}).get('total', 0):,}", inline=True)
     embed.add_field(name="🎸 Genres", value=", ".join(artist_data.get("genres", [])) or "N/A", inline=True)
-    embed.add_field(name="🔥 Top Songs", value="\n".join(top_tracks) if top_tracks else "No tracks found.", inline=False)
-    embed.add_field(name="📀 Latest Albums", value="\n".join(latest_albums) if latest_albums else "No albums found.", inline=False)
-    embed.set_footer(text="Powered by Spotify API 🎶", icon_url="https://cdn-icons-png.flaticon.com/512/2111/2111624.png")
+
+    # Top songs
+    embed.add_field(
+        name="🔥 Top Songs (Top 5)",
+        value="\n".join(top_tracks) if top_tracks else "No tracks found.",
+        inline=False
+    )
+
+    # Latest albums
+    embed.add_field(
+        name="📀 Latest Albums (min 3 tracks each)",
+        value="\n".join(latest_albums) if latest_albums else "No albums found.",
+        inline=False
+    )
+
+    embed.set_footer(
+        text="Powered by Spotify API 🎶",
+        icon_url="https://cdn-icons-png.flaticon.com/512/2111/2111624.png"
+    )
     return embed
-
-
-def get_artist_latest_album(token):
-    url = f"https://api.spotify.com/v1/artists/{SPOTIFY_ARTIST_ID}/albums"
-    headers = {"Authorization": f"Bearer {token}"}
-    params = {"include_groups": "album,single", "limit": 1, "market": "US"}
-    res = requests.get(url, headers=headers, params=params).json()
-    if res.get("items"):
-        return res["items"][0]
-    return None
 
 
 def create_spotify_view(artist_data):

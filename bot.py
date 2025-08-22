@@ -9,7 +9,6 @@ from tickets import setup as setup_tickets
 from spotify import get_spotify_token, create_spotify_artist_embed, get_latest_albums, create_spotify_view
 from youtube import get_latest_video, create_youtube_video_embed
 from lyrics import fetch_lyrics, paginate_lyrics, LyricsPaginator, create_lyrics_embed
-from ai import ask_gpt, paginate_text, create_ai_embed, AIPaginator
 from music import setup as setup_music
 
 # -------------------------
@@ -110,6 +109,10 @@ async def post(ctx, *, message):
 # --- Spotify Search
 @bot.command(name="search")
 async def search(ctx, *, artist_name):
+    """
+    Search for an artist on Spotify and display info:
+    Top songs, latest albums, followers, genres, and Open in Spotify button.
+    """
     global SPOTIFY_ACCESS_TOKEN
     if not SPOTIFY_ACCESS_TOKEN:
         SPOTIFY_ACCESS_TOKEN = get_spotify_token()
@@ -120,16 +123,28 @@ async def search(ctx, *, artist_name):
     items = resp.get("artists", {}).get("items", [])
     if not items:
         return await ctx.send("🎵 Artist not found.")
+
     artist = items[0]
     artist_id = artist["id"]
 
-    top_tracks_data = requests.get(f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks?market=US", headers=headers).json()
-    top_tracks = [f"🎵 [{t['name']}]({t['external_urls']['spotify']})" for t in top_tracks_data.get("tracks", [])[:5]]
+    # Top tracks (limit 5)
+    top_tracks_data = requests.get(
+        f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks?market=US", 
+        headers=headers
+    ).json()
+    top_tracks = [f"🎵 [{t['name']}]({t['external_urls']['spotify']})" 
+                  for t in top_tracks_data.get("tracks", [])[:5]]
 
+    # Latest albums (limit 5, min 3 tracks)
     latest_albums = get_latest_albums(artist_id, SPOTIFY_ACCESS_TOKEN, limit=5)
+
+    # Embed
     embed = create_spotify_artist_embed(artist, top_tracks, latest_albums)
+
+    # UI Button
     view = create_spotify_view(artist)
-    await ctx.send(content=ROLE_MENTION, embed=embed, view=view)
+
+    await ctx.send(embed=embed, view=view)
 
 # --- Lyrics
 @bot.command()
@@ -153,16 +168,6 @@ async def lyrics(ctx, *, query: str):
         view = LyricsPaginator(ctx, song_name, artist_name, pages)
         await view.update_message()
 
-# --- AI
-@bot.command(name="ask")
-async def ask(ctx, *, question):
-    await ctx.defer()
-    from ai import ask_gpt, paginate_text, create_ai_embed, AIPaginator
-
-    answer = await ask_gpt(question)
-    pages = paginate_text(answer)
-    view = AIPaginator(ctx, question, pages)
-    await view.update_message()
 # --- Help
 @bot.command(name="help")
 async def help_command(ctx):
@@ -184,7 +189,6 @@ async def help_command(ctx):
                     value="Automated new video posts with Open button",
                     inline=False)
     embed.add_field(name="🎤 Lyrics", value="`!lyrics <artist> - <song>` - Fetch full lyrics", inline=False)
-    embed.add_field(name="🤖 AI", value="`!ask <question>` - Ask AI", inline=False)
     embed.set_footer(text="Powered by YelziciansBot 🎶")
     await ctx.send(embed=embed)
 
