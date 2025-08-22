@@ -3,101 +3,133 @@ from discord.ext import commands
 from discord.ui import View, Button
 import yt_dlp
 import asyncio
+import os
 
-class MusicPlayer:
-    def __init__(self):
-        self.queue = []
-        self.current = None
-        self.voice_client = None
+YTDLP_OPTIONS = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": True,
+    "cookiefile": "cookies.txt",  # <-- your cookies.txt
+    "extract_flat": True,
+    "playlist_items": "0-100",  # for playlists, up to 100 songs
+}
 
-    async def join_voice(self, ctx):
-        if ctx.author.voice:
-            channel = ctx.author.voice.channel
-            if ctx.guild.voice_client:
-                self.voice_client = ctx.guild.voice_client
-            else:
-                self.voice_client = await channel.connect()
-        else:
-            await ctx.send("❌ You must be in a voice channel to play music.")
+queues = {}  # {guild_id: [url1, url2,...]}
+players = {}  # {guild_id: current voice player}
 
-    async def play_song(self, ctx, query):
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "quiet": True,
-            "nocheckcertificate": True,
-        }
+# -------------------------
+# Music Controls UI
+# -------------------------
+class MusicControls(View):
+    def __init__(self, ctx):
+        super().__init__(timeout=None)
+        self.ctx = ctx
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(query, download=False)
-        except yt_dlp.utils.DownloadError as e:
-            if "[DRM]" in str(e):
-                await ctx.send("❌ This video is DRM-protected and cannot be played.")
-            else:
-                await ctx.send(f"❌ Error fetching video: {e}")
-            return
+    @discord.ui.button(label="⏭ Skip", style=discord.ButtonStyle.green)
+    async def skip(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await self.ctx.invoke(self.ctx.bot.get_command("skip"))
 
-        url = info['url']
-        self.current = info
+    @discord.ui.button(label="⏹ Stop", style=discord.ButtonStyle.red)
+    async def stop(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await self.ctx.invoke(self.ctx.bot.get_command("stop"))
 
-        source = discord.FFmpegPCMAudio(url, options='-vn')
-        if not self.voice_client.is_playing():
-            self.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(self.next_song(ctx), ctx.bot.loop))
-            await ctx.send(f"▶️ Now playing: **{info.get('title', 'Unknown')}**", view=self.create_controls(ctx))
-        else:
-            self.queue.append(query)
-            await ctx.send(f"⏳ Added to queue: **{info.get('title', 'Unknown')}**")
+    @discord.ui.button(label="📋 Queue", style=discord.ButtonStyle.blurple)
+    async def queue(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await self.ctx.invoke(self.ctx.bot.get_command("queue"))
 
-    async def next_song(self, ctx):
-        if self.queue:
-            next_query = self.queue.pop(0)
-            await self.play_song(ctx, next_query)
+# -------------------------
+# Helper Functions
+# -------------------------
+async def play_next(ctx, guild_id):
+    if guild_id not in queues or not queues[guild_id]:
+        players.pop(guild_id, None)
+        return
+    url = queues[guild_id].pop(0)
 
-    def create_controls(self, ctx):
-        view = View()
+    YTDL = yt_dlp.YoutubeDL(YTDLP_OPTIONS)
+    info = YTDL.extract_info(url, download=False)
+    if "entries" in info:  # Playlist
+        info = info["entries"][0]
 
-        async def skip_callback(interaction):
-            if self.voice_client.is_playing():
-                self.voice_client.stop()
-                await interaction.response.send_message("⏭ Skipped!", ephemeral=True)
+    url2 = info["url"]
+    title = info.get("title", "Unknown Track")
 
-        async def stop_callback(interaction):
-            if self.voice_client.is_playing():
-                self.voice_client.stop()
-            if self.voice_client:
-                await self.voice_client.disconnect()
-            await interaction.response.send_message("⏹ Stopped and left the channel.", ephemeral=True)
+    voice = discord.utils.get(ctx.guild.voice_channels, guild=ctx.voice_client.channel) or ctx.voice_client
+    if not voice:
+        return await ctx.send("⛔ Bot is not connected to a voice channel!")
 
-        skip_btn = Button(label="⏭ Skip", style=discord.ButtonStyle.primary)
-        skip_btn.callback = skip_callback
-        stop_btn = Button(label="⏹ Stop", style=discord.ButtonStyle.danger)
-        stop_btn.callback = stop_callback
+    players[guild_id] = voice
+    source = discord.FFmpegPCMAudio(url2, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+    voice.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx, guild_id), ctx.bot.loop))
 
-        view.add_item(skip_btn)
-        view.add_item(stop_btn)
-        return view
+    embed = discord.Embed(title="🎶 Now Playing", description=title, color=discord.Color.blurple())
+    await ctx.send(embed=embed, view=MusicControls(ctx))
 
-
-# -----------------
-# Commands for bot.py
-# -----------------
+# -------------------------
+# Commands
+# -------------------------
 async def setup(bot):
-    player = MusicPlayer()
-
-    @bot.command(name="play")
+    @bot.command()
     async def play(ctx, *, query):
-        await player.join_voice(ctx)
-        await player.play_song(ctx, query)
+        """Play a song or playlist from YouTube"""
+        if not ctx.voice_client:
+            if ctx.author.voice:
+                await ctx.author.voice.channel.connect()
+            else:
+                return await ctx.send("⛔ You need to join a voice channel first!")
 
-    @bot.command(name="skip")
+        guild_id = ctx.guild.id
+        YTDL = yt_dlp.YoutubeDL(YTDLP_OPTIONS)
+        info = YTDL.extract_info(query, download=False)
+        urls = []
+        if "entries" in info:  # Playlist
+            for entry in info["entries"]:
+                if entry:
+                    urls.append(entry["webpage_url"])
+        else:
+            urls.append(info["webpage_url"])
+
+        if guild_id not in queues:
+            queues[guild_id] = []
+
+        queues[guild_id].extend(urls)
+        await ctx.send(f"✅ Added {len(urls)} song(s) to the queue.")
+
+        if guild_id not in players or not ctx.voice_client.is_playing():
+            await play_next(ctx, guild_id)
+
+    @bot.command()
     async def skip(ctx):
-        if player.voice_client and player.voice_client.is_playing():
-            player.voice_client.stop()
-            await ctx.send("⏭ Skipped current song.")
+        """Skip current song"""
+        vc = ctx.voice_client
+        if vc and vc.is_playing():
+            vc.stop()
+            await ctx.send("⏭ Skipped the current song.")
+        else:
+            await ctx.send("⛔ Nothing is playing.")
 
-    @bot.command(name="stop")
+    @bot.command()
     async def stop(ctx):
-        if player.voice_client:
-            player.voice_client.stop()
-            await player.voice_client.disconnect()
-            await ctx.send("⏹ Stopped and left the channel.")
+        """Stop playback and clear queue"""
+        vc = ctx.voice_client
+        guild_id = ctx.guild.id
+        if vc:
+            vc.stop()
+            queues[guild_id] = []
+            await ctx.send("⏹ Stopped playback and cleared the queue.")
+        else:
+            await ctx.send("⛔ Not connected.")
+
+    @bot.command()
+    async def queue(ctx):
+        """Show current queue"""
+        guild_id = ctx.guild.id
+        if guild_id in queues and queues[guild_id]:
+            desc = "\n".join(f"{i+1}. {url}" for i, url in enumerate(queues[guild_id][:10]))
+            await ctx.send(f"📋 Current Queue:\n{desc}")
+        else:
+            await ctx.send("📋 Queue is empty.")

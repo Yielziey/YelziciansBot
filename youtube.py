@@ -1,6 +1,8 @@
 import requests
 import discord
 import os
+from discord.ui import View, Button
+from bot import ROLE_MENTION  # Make sure ROLE_MENTION is defined in bot.py
 
 # Load API key and channel ID from environment variables
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
@@ -52,3 +54,20 @@ def create_youtube_video_embed(video: dict) -> discord.Embed:
     )
     
     return embed
+
+async def post_latest_video(bot):
+    """
+    Check the latest video and post to Discord channel with role mention and button.
+    """
+    video = get_latest_video(YOUTUBE_CHANNEL_ID)
+    if not video:
+        print("No new video found.")
+        return
+    
+    video_id = video["id"].get("videoId")
+    channel = bot.get_channel(YOUTUBE_CHANNEL_ID)  # Discord channel ID
+    if channel:
+        embed = create_youtube_video_embed(video)
+        view = View()
+        view.add_item(Button(label="Watch on YouTube", url=f"https://www.youtube.com/watch?v={video_id}", style=discord.ButtonStyle.link))
+        await channel.send(content=ROLE_MENTION, embed=embed, view=view)

@@ -109,10 +109,7 @@ async def post(ctx, *, message):
 # --- Spotify Search
 @bot.command(name="search")
 async def search(ctx, *, artist_name):
-    """
-    Search for an artist on Spotify and display info:
-    Top songs, latest albums, followers, genres, and Open in Spotify button.
-    """
+    """Search Spotify for an artist and post a nice embed with top tracks and albums."""
     global SPOTIFY_ACCESS_TOKEN
     if not SPOTIFY_ACCESS_TOKEN:
         SPOTIFY_ACCESS_TOKEN = get_spotify_token()
@@ -121,30 +118,31 @@ async def search(ctx, *, artist_name):
     search_url = f"https://api.spotify.com/v1/search?q={artist_name}&type=artist&limit=1"
     resp = requests.get(search_url, headers=headers).json()
     items = resp.get("artists", {}).get("items", [])
+    
     if not items:
         return await ctx.send("🎵 Artist not found.")
 
     artist = items[0]
     artist_id = artist["id"]
 
-    # Top tracks (limit 5)
+    # Get top tracks
     top_tracks_data = requests.get(
-        f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks?market=US", 
-        headers=headers
+        f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks?market=US", headers=headers
     ).json()
-    top_tracks = [f"🎵 [{t['name']}]({t['external_urls']['spotify']})" 
-                  for t in top_tracks_data.get("tracks", [])[:5]]
+    top_tracks = [
+        f"🎵 [{t['name']}]({t['external_urls']['spotify']})"
+        for t in top_tracks_data.get("tracks", [])[:5]
+    ]
 
-    # Latest albums (limit 5, min 3 tracks)
+    # Get latest albums with 3+ tracks
     latest_albums = get_latest_albums(artist_id, SPOTIFY_ACCESS_TOKEN, limit=5)
 
-    # Embed
+    # Create embed and view
     embed = create_spotify_artist_embed(artist, top_tracks, latest_albums)
-
-    # UI Button
     view = create_spotify_view(artist)
 
-    await ctx.send(embed=embed, view=view)
+    # Send embed with role mention
+    await ctx.send(content=ROLE_MENTION, embed=embed, view=view)
 
 # --- Lyrics
 @bot.command()
@@ -231,8 +229,15 @@ async def check_youtube():
         if channel:
             embed = create_youtube_video_embed(video)
             view = View()
-            view.add_item(Button(label="Watch on YouTube", url=f"https://www.youtube.com/watch?v={video_id}", style=discord.ButtonStyle.link))
-            await channel.send(embed=embed, view=view)
+            view.add_item(
+                Button(
+                    label="Watch on YouTube",
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    style=discord.ButtonStyle.link
+                )
+            )
+            # Ping the role
+            await channel.send(content=ROLE_MENTION, embed=embed, view=view)
 
 # -------------------------
 # Bot Startup
