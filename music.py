@@ -77,9 +77,10 @@ class MusicPlayer:
 # Bot Setup
 # -------------------------
 async def setup(bot):
+
+    # --- Play Command
     @bot.command()
     async def play(ctx, *, query):
-        """Play a song from YouTube or Spotify link"""
         guild_id = ctx.guild.id
         player = players.get(guild_id)
         if not player:
@@ -113,9 +114,42 @@ async def setup(bot):
         player.queue.append(Song(query, query, ctx))
         await ctx.send(f"✅ Added **{query}** to the queue.")
 
-    # -------------------------
-    # Music Control Buttons
-    # -------------------------
+    # --- Queue List
+    @bot.command()
+    async def queuelist(ctx):
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player or (not player.queue and not player.current):
+            await ctx.send("❌ The queue is empty.")
+            return
+
+        description = ""
+        if player.current:
+            description += f"▶️ **Now Playing:** {player.current.title}\n\n"
+        if player.queue:
+            for i, song in enumerate(player.queue, 1):
+                description += f"{i}. {song.title}\n"
+
+        embed = discord.Embed(title="🎶 Music Queue", description=description, color=discord.Color.blue())
+        await ctx.send(embed=embed)
+
+    # --- Reset Queue
+    @bot.command()
+    async def reset(ctx):
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player:
+            await ctx.send("❌ No music is playing right now.")
+            return
+
+        if player.voice and player.voice.is_connected():
+            await player.voice.disconnect()
+
+        player.queue.clear()
+        player.current = None
+        await ctx.send("✅ Queue cleared and disconnected from voice channel.")
+
+    # --- Music Control Buttons
     class MusicControlView(View):
         def __init__(self, player):
             super().__init__(timeout=None)
