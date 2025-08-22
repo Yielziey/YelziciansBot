@@ -4,6 +4,8 @@ from discord.ui import View, Button
 import asyncio
 import yt_dlp
 import os
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
 
 # -------------------------
 # Globals
@@ -24,18 +26,24 @@ class Song:
 # Music Player
 # -------------------------
 class MusicPlayer:
-    def __init__(self, bot, guild, text_channel):
+    def __init__(self, bot, guild):
         self.bot = bot
         self.guild = guild
         self.queue = queues.setdefault(guild.id, [])
         self.current = None
         self.voice = None
-        self.text_channel = text_channel
         self.play_next_event = asyncio.Event()
         self.loop_task = bot.loop.create_task(self.player_loop())
         self.volume = 0.5
         self.is_paused = False
-        self.controls_view = MusicControlView(self)
+
+        # YDL options
+        self.ydl_opts = {
+            "format": "bestaudio/best",
+            "quiet": True,
+            "nocheckcertificate": True,
+            "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
+        }
 
     async def player_loop(self):
         while True:
@@ -46,43 +54,104 @@ class MusicPlayer:
             self.current = self.queue.pop(0)
             channel = getattr(self.current.requester.author.voice, "channel", None)
             if not channel:
-                await self.text_channel.send(f"❌ {self.current.requester.author.mention}, you are not in a voice channel!")
+                await self.current.requester.send("❌ You are not in a voice channel!")
                 continue
 
             if not self.voice or not self.voice.is_connected():
-                try:
-                    self.voice = await channel.connect()
-                except discord.ClientException:
-                    pass
-
-            ydl_opts = {
-                "format": "bestaudio/best",
-                "quiet": True,
-                "nocheckcertificate": True,
-                "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
-            }
+                self.voice = await channel.connect()
 
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract fresh URL every time
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                     info = ydl.extract_info(self.current.url, download=False)
                     url2 = info['url']
 
                 source = discord.FFmpegPCMAudio(url2, options=f"-vn -filter:a volume={self.volume}")
-                self.voice.play(source, after=lambda e: self.bot.loop.call_soon_threadsafe(self.play_next_event.set))
-                
-                # Always show controls view in text channel
-                await self.text_channel.send(f"▶️ Now playing: **{self.current.title}**", view=self.controls_view)
+                self.voice.play(source, after=lambda e: self.play_next_event.set())
+                await self.current.requester.send(f"▶️ Now playing: **{self.current.title}**")
 
                 self.is_paused = False
                 await self.play_next_event.wait()
                 self.play_next_event.clear()
 
             except Exception as e:
-                await self.text_channel.send(f"❌ Could not play **{self.current.title}**: {e}")
+                await self.current.requester.send(f"⚠ Could not play {self.current.title}, skipping... ({e})")
                 continue
 
 # -------------------------
-# Music Control Buttons
+# Bot Setup
+# -------------------------
+async def setup(bot):
+
+    # -------------------------
+    # Play Command
+    # -------------------------
+    @bot.command()
+    async def play(ctx, *, query):
+        """Play a song from YouTube or Spotify link"""
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player:
+            player = MusicPlayer(bot, ctx.guild)
+            players[guild_id] = player
+
+        # Spotify link handling
+        if "spotify.com" in query:
+            sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+                client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+                client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
+            ))
+
+            if "track" in query:
+                track_id = query.split("/")[-1].split("?")[0]
+                track = sp.track(track_id)
+                query = f"{track['name']} {track['artists'][0]['name']}"
+            elif "playlist" in query:
+                playlist_id = query.split("/")[-1].split("?")[0]
+                playlist = sp.playlist_items(playlist_id)
+                for item in playlist['items']:
+                    track = item['track']
+                    youtube_query = f"{track['name']} {track['artists'][0]['name']}"
+                    player.queue.append(Song(track['name'], youtube_query, ctx))
+                await ctx.send(f"✅ Added **{len(playlist['items'])} tracks** to the queue.")
+                # Auto-show controls
+                view = MusicControlView(player)
+                await ctx.send("🎶 Music Controls", view=view)
+                return
+
+        player.queue.append(Song(query, query, ctx))
+        await ctx.send(f"✅ Added **{query}** to the queue.")
+        # Auto-show controls
+        view = MusicControlView(player)
+        await ctx.send("🎶 Music Controls", view=view)
+
+    # -------------------------
+    # Queue Commands
+    # -------------------------
+    @bot.command()
+    async def queuelist(ctx):
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player or not player.queue:
+            await ctx.send("Queue is empty.")
+            return
+        queue_text = "\n".join([f"{i+1}. {s.title}" for i, s in enumerate(player.queue)])
+        await ctx.send(f"🎵 Current Queue:\n{queue_text}")
+
+    @bot.command()
+    async def reset(ctx):
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if player:
+            player.queue.clear()
+            if player.voice and player.voice.is_connected():
+                await player.voice.disconnect()
+            await ctx.send("✅ Queue cleared and disconnected from voice channel.")
+        else:
+            await ctx.send("Nothing to reset.")
+
+# -------------------------
+# Music Controls
 # -------------------------
 class MusicControlView(View):
     def __init__(self, player):
@@ -125,63 +194,3 @@ class MusicControlView(View):
     async def vol_down(self, interaction: discord.Interaction, button: Button):
         self.player.volume = max(self.player.volume - 0.1, 0.0)
         await interaction.response.send_message(f"🔉 Volume: {int(self.player.volume*100)}%", ephemeral=True)
-
-# -------------------------
-# Bot Setup
-# -------------------------
-async def setup(bot):
-    @bot.command()
-    async def play(ctx, *, query):
-        """Play a song from YouTube or Spotify link"""
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if not player:
-            player = MusicPlayer(bot, ctx.guild, ctx.channel)
-            players[guild_id] = player
-
-        # Spotify link handling
-        if "spotify.com" in query:
-            import spotipy
-            from spotipy.oauth2 import SpotifyClientCredentials
-            sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-                client_id=os.getenv("SPOTIFY_CLIENT_ID"),
-                client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
-            ))
-
-            if "track" in query:
-                track_id = query.split("/")[-1].split("?")[0]
-                track = sp.track(track_id)
-                query = f"{track['name']} {track['artists'][0]['name']}"
-            elif "playlist" in query:
-                playlist_id = query.split("/")[-1].split("?")[0]
-                playlist = sp.playlist_items(playlist_id)
-                for item in playlist['items']:
-                    track = item['track']
-                    youtube_query = f"{track['name']} {track['artists'][0]['name']}"
-                    player.queue.append(Song(track['name'], youtube_query, ctx))
-                await ctx.send(f"✅ Added **{len(playlist['items'])} tracks** to the queue.")
-                return
-
-        player.queue.append(Song(query, query, ctx))
-        await ctx.send(f"✅ Added **{query}** to the queue.")
-
-    @bot.command()
-    async def queuelist(ctx):
-        """Shows the current queue"""
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if not player or not player.queue:
-            return await ctx.send("Queue is empty.")
-        msg = "\n".join([f"{i+1}. {s.title}" for i, s in enumerate(player.queue)])
-        await ctx.send(f"🎶 Queue:\n{msg}")
-
-    @bot.command()
-    async def reset(ctx):
-        """Clears the queue and stops the player"""
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if player:
-            if player.voice:
-                await player.voice.disconnect()
-            player.queue.clear()
-        await ctx.send("✅ Queue cleared and player stopped.")

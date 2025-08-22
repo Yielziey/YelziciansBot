@@ -1,32 +1,33 @@
-# Base image
+# Use official Python 3.12 slim image
 FROM python:3.12-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PATH="/root/.local/bin:$PATH"
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        curl \
+        git \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all project files
 COPY . .
 
-# Expose port for Railway health checks (optional)
+# Expose port (Railway uses this)
 EXPOSE 8080
 
-# Environment variables (can override in Railway)
-ENV DISCORD_TOKEN=""
-ENV SPOTIFY_CLIENT_ID=""
-ENV SPOTIFY_CLIENT_SECRET=""
-ENV YOUTUBE_API_KEY=""
-ENV YOUTUBE_API_CHANNEL_ID=""
-
-# Command to run the bot
+# Command to run your bot
 CMD ["python", "bot.py"]
