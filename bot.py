@@ -7,7 +7,7 @@ import json, requests
 
 from tickets import setup as setup_tickets
 from spotify import get_spotify_token, create_spotify_artist_embed, get_latest_albums, create_spotify_view
-from youtube import get_latest_video, create_youtube_video_embed
+from youtube import get_latest_video, create_youtube_video_embed, create_youtube_view
 from lyrics import fetch_lyrics, paginate_lyrics, LyricsPaginator, create_lyrics_embed
 from music import setup as setup_music
 
@@ -227,18 +227,10 @@ async def check_youtube():
         latest_youtube_video = video_id
         channel = bot.get_channel(YOUTUBE_CHANNEL_ID)
         if channel:
-            embed = create_youtube_video_embed(video)
-            view = View()
-            view.add_item(
-                Button(
-                    label="Watch on YouTube",
-                    url=f"https://www.youtube.com/watch?v={video_id}",
-                    style=discord.ButtonStyle.link
-                )
-            )
-            # Ping the role
+            embed = create_youtube_video_embed(video, role_mention=ROLE_MENTION)
+            view = create_youtube_view(video_id)
             await channel.send(content=ROLE_MENTION, embed=embed, view=view)
-
+            
 # -------------------------
 # Bot Startup
 # -------------------------

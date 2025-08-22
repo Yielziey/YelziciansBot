@@ -1,24 +1,41 @@
-# Use official Python image
+# Dockerfile for YelziciansBot
+
+# Base image
 FROM python:3.12-slim
 
-# Set working directory
+# -------------------------
+# Environment & Workdir
+# -------------------------
 WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
+# -------------------------
 # Install system dependencies
+# -------------------------
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python packages
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# -------------------------
+# Copy project files
+# -------------------------
+COPY . /app
 
-# Copy bot files
-COPY . .
+# -------------------------
+# Upgrade pip and install Python dependencies
+# -------------------------
+RUN python -m pip install --upgrade pip
+RUN pip install -r requirements.txt
 
-# Expose port (optional, if you plan health checks or web)
-EXPOSE 8080
+# -------------------------
+# Expose any ports if needed
+# -------------------------
+# EXPOSE 8080
 
-# Run the bot
+# -------------------------
+# Command to run the bot
+# -------------------------
 CMD ["python", "bot.py"]

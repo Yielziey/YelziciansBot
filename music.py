@@ -1,135 +1,137 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Button
-import yt_dlp
 import asyncio
+import yt_dlp
 import os
 
+# -------------------------
+# Globals & Config
+# -------------------------
+QUEUE = {}
 YTDLP_OPTIONS = {
     "format": "bestaudio/best",
+    "noplaylist": False,  # Allow playlists
     "quiet": True,
-    "nocheckcertificate": True,
-    "ignoreerrors": True,
-    "cookiefile": "cookies.txt",  # <-- your cookies.txt
-    "extract_flat": True,
-    "playlist_items": "0-100",  # for playlists, up to 100 songs
+    "extract_flat": False,
+    "cookiefile": "cookies.txt",  # Make sure your cookies.txt works
 }
 
-queues = {}  # {guild_id: [url1, url2,...]}
-players = {}  # {guild_id: current voice player}
-
 # -------------------------
-# Music Controls UI
+# Music Player Class
 # -------------------------
-class MusicControls(View):
-    def __init__(self, ctx):
-        super().__init__(timeout=None)
-        self.ctx = ctx
+class MusicPlayer:
+    def __init__(self, bot):
+        self.bot = bot
+        self.queue = {}  # guild_id: [songs]
+        self.current = {}  # guild_id: current voice_client
 
-    @discord.ui.button(label="⏭ Skip", style=discord.ButtonStyle.green)
-    async def skip(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        await self.ctx.invoke(self.ctx.bot.get_command("skip"))
-
-    @discord.ui.button(label="⏹ Stop", style=discord.ButtonStyle.red)
-    async def stop(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        await self.ctx.invoke(self.ctx.bot.get_command("stop"))
-
-    @discord.ui.button(label="📋 Queue", style=discord.ButtonStyle.blurple)
-    async def queue(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        await self.ctx.invoke(self.ctx.bot.get_command("queue"))
-
-# -------------------------
-# Helper Functions
-# -------------------------
-async def play_next(ctx, guild_id):
-    if guild_id not in queues or not queues[guild_id]:
-        players.pop(guild_id, None)
-        return
-    url = queues[guild_id].pop(0)
-
-    YTDL = yt_dlp.YoutubeDL(YTDLP_OPTIONS)
-    info = YTDL.extract_info(url, download=False)
-    if "entries" in info:  # Playlist
-        info = info["entries"][0]
-
-    url2 = info["url"]
-    title = info.get("title", "Unknown Track")
-
-    voice = discord.utils.get(ctx.guild.voice_channels, guild=ctx.voice_client.channel) or ctx.voice_client
-    if not voice:
-        return await ctx.send("⛔ Bot is not connected to a voice channel!")
-
-    players[guild_id] = voice
-    source = discord.FFmpegPCMAudio(url2, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
-    voice.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx, guild_id), ctx.bot.loop))
-
-    embed = discord.Embed(title="🎶 Now Playing", description=title, color=discord.Color.blurple())
-    await ctx.send(embed=embed, view=MusicControls(ctx))
-
-# -------------------------
-# Commands
-# -------------------------
-async def setup(bot):
-    @bot.command()
-    async def play(ctx, *, query):
-        """Play a song or playlist from YouTube"""
-        if not ctx.voice_client:
-            if ctx.author.voice:
-                await ctx.author.voice.channel.connect()
-            else:
-                return await ctx.send("⛔ You need to join a voice channel first!")
-
+    async def play_song(self, ctx, query):
         guild_id = ctx.guild.id
-        YTDL = yt_dlp.YoutubeDL(YTDLP_OPTIONS)
-        info = YTDL.extract_info(query, download=False)
-        urls = []
-        if "entries" in info:  # Playlist
-            for entry in info["entries"]:
-                if entry:
-                    urls.append(entry["webpage_url"])
+
+        # Ensure queue exists
+        if guild_id not in self.queue:
+            self.queue[guild_id] = []
+
+        # Extract info using yt-dlp
+        ydl_opts = YTDLP_OPTIONS.copy()
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(query, download=False)
+        except yt_dlp.utils.DownloadError as e:
+            return await ctx.send(f"❌ Could not play the song/playlist: {e}")
+
+        # If it's a playlist, add all entries
+        if "entries" in info:
+            songs = info["entries"]
         else:
-            urls.append(info["webpage_url"])
+            songs = [info]
 
-        if guild_id not in queues:
-            queues[guild_id] = []
+        # Add to queue
+        self.queue[guild_id].extend(songs)
 
-        queues[guild_id].extend(urls)
-        await ctx.send(f"✅ Added {len(urls)} song(s) to the queue.")
+        # If not connected to voice, join
+        voice_client = discord.utils.get(self.bot.voice_clients, guild=ctx.guild)
+        if not voice_client:
+            if ctx.author.voice:
+                channel = ctx.author.voice.channel
+                voice_client = await channel.connect()
+            else:
+                return await ctx.send("⛔ You must be in a voice channel to play music.")
 
-        if guild_id not in players or not ctx.voice_client.is_playing():
-            await play_next(ctx, guild_id)
+        # Store voice client
+        self.current[guild_id] = voice_client
 
-    @bot.command()
-    async def skip(ctx):
-        """Skip current song"""
-        vc = ctx.voice_client
-        if vc and vc.is_playing():
-            vc.stop()
-            await ctx.send("⏭ Skipped the current song.")
+        # If already playing, just notify added to queue
+        if voice_client.is_playing():
+            return await ctx.send(f"✅ Added {len(songs)} song(s) to the queue.")
+
+        # Start playback
+        await self._play_next(ctx)
+
+    async def _play_next(self, ctx):
+        guild_id = ctx.guild.id
+        if not self.queue[guild_id]:
+            return
+
+        song = self.queue[guild_id].pop(0)
+        url = song.get("url") or song.get("webpage_url")
+        title = song.get("title", "Unknown Track")
+
+        voice_client = self.current[guild_id]
+        source = discord.FFmpegPCMAudio(url, options="-vn")
+
+        def after_playing(error):
+            coro = self._play_next(ctx)
+            fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"Error in after_playing: {e}")
+
+        voice_client.play(source, after=after_playing)
+        asyncio.create_task(ctx.send(f"▶️ Now playing: **{title}**"))
+
+    async def skip(self, ctx):
+        guild_id = ctx.guild.id
+        voice_client = self.current.get(guild_id)
+        if voice_client and voice_client.is_playing():
+            voice_client.stop()
+            await ctx.send("⏭ Skipped current song.")
         else:
             await ctx.send("⛔ Nothing is playing.")
 
-    @bot.command()
-    async def stop(ctx):
-        """Stop playback and clear queue"""
-        vc = ctx.voice_client
+    async def stop(self, ctx):
         guild_id = ctx.guild.id
-        if vc:
-            vc.stop()
-            queues[guild_id] = []
-            await ctx.send("⏹ Stopped playback and cleared the queue.")
-        else:
-            await ctx.send("⛔ Not connected.")
+        voice_client = self.current.get(guild_id)
+        self.queue[guild_id] = []
+        if voice_client and voice_client.is_playing():
+            voice_client.stop()
+        await ctx.send("⏹ Stopped playback and cleared the queue.")
 
-    @bot.command()
-    async def queue(ctx):
-        """Show current queue"""
+# -------------------------
+# Setup Function for Bot
+# -------------------------
+async def setup(bot):
+    bot.music_player = MusicPlayer(bot)
+
+    @bot.command(name="play")
+    async def play(ctx, *, query):
+        await bot.music_player.play_song(ctx, query)
+
+    @bot.command(name="skip")
+    async def skip(ctx):
+        await bot.music_player.skip(ctx)
+
+    @bot.command(name="stop")
+    async def stop(ctx):
+        await bot.music_player.stop(ctx)
+
+    @bot.command(name="queue")
+    async def show_queue(ctx):
         guild_id = ctx.guild.id
-        if guild_id in queues and queues[guild_id]:
-            desc = "\n".join(f"{i+1}. {url}" for i, url in enumerate(queues[guild_id][:10]))
-            await ctx.send(f"📋 Current Queue:\n{desc}")
-        else:
-            await ctx.send("📋 Queue is empty.")
+        q = bot.music_player.queue.get(guild_id, [])
+        if not q:
+            return await ctx.send("📭 The queue is empty.")
+        desc = "\n".join([f"{i+1}. {song.get('title', 'Unknown')}" for i, song in enumerate(q)])
+        await ctx.send(f"🎶 **Queue:**\n{desc}")
