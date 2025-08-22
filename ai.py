@@ -2,70 +2,64 @@ import os
 import openai
 import asyncio
 import discord
+from discord.ext import commands
 from discord.ui import View, Button
-from dotenv import load_dotenv
 
+# Load API key
+from dotenv import load_dotenv
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # -------------------------
-# GPT Query Function
+# AI Interaction
 # -------------------------
 async def ask_gpt(question: str) -> str:
     """
     Send a question to OpenAI GPT and return the answer.
     """
-    loop = asyncio.get_event_loop()
     try:
-        response = await loop.run_in_executor(
-            None,
-            lambda: openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a helpful Discord bot."},
-                    {"role": "user", "content": question}
-                ],
-                temperature=0.7,
-                max_tokens=300
-            )
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-3.5-turbo",  # use gpt-4 if your API has access
+            messages=[
+                {"role": "system", "content": "You are a helpful Discord bot."},
+                {"role": "user", "content": question}
+            ],
+            temperature=0.7,
+            max_tokens=500
         )
-        answer = response.choices[0].message.content.strip()
-        return answer
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"❌ AI Error: {e}")
-        return "Sorry, I couldn't process that question."
+        print("❌ OpenAI API Error:", e)
+        return f"Sorry, I couldn't process that question. ({e})"
 
 # -------------------------
 # Pagination Utilities
 # -------------------------
-def paginate_text(text: str, max_chars=1000):
+def paginate_text(text, max_chars=1000):
     """
-    Split long text into pages for Discord embeds.
+    Splits long text into chunks for Discord embeds.
     """
-    pages = []
-    current = ""
-    for line in text.split("\n"):
-        if len(current) + len(line) + 1 > max_chars:
-            pages.append(current)
-            current = line
-        else:
-            current += line + "\n"
-    if current:
-        pages.append(current)
-    return pages
+    chunks = []
+    while len(text) > max_chars:
+        split_at = text.rfind("\n", 0, max_chars)
+        if split_at == -1:
+            split_at = max_chars
+        chunks.append(text[:split_at])
+        text = text[split_at:].strip()
+    chunks.append(text)
+    return chunks
 
-def create_ai_embed(question: str, answer_part: str, page_num: int, total_pages: int):
+def create_ai_embed(question, answer_chunk, page, total_pages):
     embed = discord.Embed(
         title="🤖 AI Answer",
-        description=answer_part,
+        description=answer_chunk,
         color=discord.Color.purple()
     )
-    embed.set_footer(text=f"Q: {question} | Page {page_num}/{total_pages}")
+    embed.set_footer(text=f"Q: {question} | Page {page}/{total_pages}")
     return embed
 
 # -------------------------
-# AI Paginator View
+# Paginator View
 # -------------------------
 class AIPaginator(View):
     def __init__(self, ctx, question, pages):
@@ -73,34 +67,50 @@ class AIPaginator(View):
         self.ctx = ctx
         self.question = question
         self.pages = pages
-        self.current_page = 0
-        self.message = None  # store sent message
+        self.current = 0
 
-    async def update_message(self):
-        embed = create_ai_embed(self.question, self.pages[self.current_page], self.current_page + 1, len(self.pages))
-        if self.message:
-            await self.message.edit(embed=embed, view=self)
-        else:
-            self.message = await self.ctx.send(embed=embed, view=self)
+    async def update_message(self, interaction):
+        embed = create_ai_embed(self.question, self.pages[self.current], self.current+1, len(self.pages))
+        await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.secondary)
-    async def prev_page(self, interaction: discord.Interaction, button: Button):
-        if self.current_page > 0:
-            self.current_page -= 1
-            await interaction.response.defer()
-            await self.update_message()
+    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.primary)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current > 0:
+            self.current -= 1
+            await self.update_message(interaction)
 
-    @discord.ui.button(label="Next ➡️", style=discord.ButtonStyle.secondary)
-    async def next_page(self, interaction: discord.Interaction, button: Button):
-        if self.current_page < len(self.pages) - 1:
-            self.current_page += 1
-            await interaction.response.defer()
-            await self.update_message()
+    @discord.ui.button(label="Next ➡️", style=discord.ButtonStyle.primary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current < len(self.pages) - 1:
+            self.current += 1
+            await self.update_message(interaction)
 
-    @discord.ui.button(label="Regenerate 🔄", style=discord.ButtonStyle.primary)
-    async def regenerate(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()  # acknowledge
+    @discord.ui.button(label="Regenerate 🔄", style=discord.ButtonStyle.success)
+    async def regenerate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()  # prevent “already responded” error
         new_answer = await ask_gpt(self.question)
         self.pages = paginate_text(new_answer)
-        self.current_page = 0
-        await self.update_message()
+        self.current = 0
+        await self.update_message(interaction)
+
+# -------------------------
+# Cog Setup
+# -------------------------
+class AICog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name="ask")
+    async def ask_command(self, ctx, *, question):
+        """
+        Ask the AI a question.
+        """
+        await ctx.defer()
+        answer = await ask_gpt(question)
+        pages = paginate_text(answer)
+        embed = create_ai_embed(question, pages[0], 1, len(pages))
+        view = AIPaginator(ctx, question, pages)
+        await ctx.send(embed=embed, view=view)
+
+async def setup(bot):
+    await bot.add_cog(AICog(bot))

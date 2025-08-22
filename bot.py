@@ -7,7 +7,7 @@ import json, requests
 
 from tickets import setup as setup_tickets
 from spotify import get_spotify_token, create_spotify_artist_embed, get_latest_albums, create_spotify_view
-from youtube import get_latest_video, create_youtube_video_embed, create_youtube_view
+from youtube import get_latest_video, create_youtube_video_embed
 from lyrics import fetch_lyrics, paginate_lyrics, LyricsPaginator, create_lyrics_embed
 from ai import ask_gpt, paginate_text, AIPaginator, create_ai_embed
 from music import setup as setup_music
@@ -20,6 +20,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_API_CHANNEL_ID = os.getenv("YOUTUBE_API_CHANNEL_ID")  # Your YouTube channel ID
 
 # -------------------------
 # Role & Channel IDs
@@ -29,7 +30,7 @@ ARTIST_ROLE_ID = 1407630978469466112
 ADMIN_ROLE_ID = 1407630846294491170
 
 SPOTIFY_ANNOUNCEMENT_CHANNEL_ID = 1407641244263514194
-YOUTUBE_ANNOUNCEMENT_CHANNEL_ID = 1407641272323412058
+YOUTUBE_CHANNEL_ID = 1408315008324079726  # Discord channel for YouTube posts
 GENERAL_ANNOUNCEMENT_CHANNEL_ID = 1407630847703781426
 
 # -------------------------
@@ -56,7 +57,7 @@ SPOTIFY_ACCESS_TOKEN = None
 latest_spotify_release = None
 latest_youtube_video = None
 
-MEMBER_ROLE_ID = 1407630846294491168   # @Member role
+MEMBER_ROLE_ID = 1407630846294491168
 ROLE_MENTION = f"<@&{MEMBER_ROLE_ID}>"
 WELCOME_CHANNEL_ID = 1407736229994430475
 
@@ -137,31 +138,34 @@ async def lyrics(ctx, *, query: str):
     Usage: !lyrics <artist> - <song>
     Example: !lyrics Adele - Hello
     """
-    await ctx.defer()
-    # Parse artist and song
-    if "-" in query:
-        artist_name, song_name = map(str.strip, query.split("-", 1))
-    else:
-        artist_name = None
-        song_name = query.strip()
+    async with ctx.typing():
+        if "-" in query:
+            artist_name, song_name = map(str.strip, query.split("-", 1))
+        else:
+            artist_name = None
+            song_name = query.strip()
 
-    lyrics_text = await fetch_lyrics(song_name, artist_name)
-    if lyrics_text.startswith("❌"):
-        return await ctx.send(lyrics_text)
+        lyrics_text = await fetch_lyrics(song_name, artist_name)
+        if lyrics_text.startswith("❌"):
+            return await ctx.send(lyrics_text)
 
-    pages = paginate_lyrics(lyrics_text)
-    view = LyricsPaginator(ctx, song_name, artist_name, pages)
-    await view.update_message()
-
+        pages = paginate_lyrics(lyrics_text)
+        view = LyricsPaginator(ctx, song_name, artist_name, pages)
+        await view.update_message()
 
 # --- AI
 @bot.command(name="ask")
 async def ask(ctx, *, question):
-    await ctx.defer()
-    answer = await ask_gpt(question)
-    pages = paginate_text(answer)
-    view = AIPaginator(ctx, question, pages)
-    await view.update_message()  # sends the first message
+    async with ctx.typing():
+        answer = await ask_gpt(question)
+        print(f"AI response: {answer}")
+        if not answer.strip():
+            answer = "Sorry, I couldn't process that question."
+
+        pages = paginate_text(answer)
+        embed = create_ai_embed(question, pages[0], 1, len(pages))
+        view = AIPaginator(ctx, question, pages)
+        await ctx.send(embed=embed, view=view)
 
 # --- Help
 @bot.command(name="help")
@@ -181,9 +185,9 @@ async def help_command(ctx):
                     value="`!search <artist>` - Show artist info\n`!play <song>` - Play song\n`!skip/!stop/!prev/!next/!volume <1-100>` - Controls",
                     inline=False)
     embed.add_field(name="🎬 YouTube",
-                    value="Automated new video posts from configured channel with Open button",
+                    value="Automated new video posts with Open button",
                     inline=False)
-    embed.add_field(name="🎤 Lyrics", value="`!lyrics <song>` - Fetch full lyrics", inline=False)
+    embed.add_field(name="🎤 Lyrics", value="`!lyrics <artist> - <song>` - Fetch full lyrics", inline=False)
     embed.add_field(name="🤖 AI", value="`!ask <question>` - Ask AI", inline=False)
     embed.set_footer(text="Powered by YelziciansBot 🎶")
     await ctx.send(embed=embed)
@@ -205,25 +209,30 @@ async def check_new_releases():
         latest_spotify_release = album_id
         channel = bot.get_channel(SPOTIFY_ANNOUNCEMENT_CHANNEL_ID)
         if channel:
-            embed = discord.Embed(title="🎵 New Release!", description=f"**{album['name']}** is out!\n[Listen here]({album['external_urls']['spotify']})", color=discord.Color.green())
+            embed = discord.Embed(
+                title="🎵 New Release!",
+                description=f"**{album['name']}** is out!\n[Listen here]({album['external_urls']['spotify']})",
+                color=discord.Color.green()
+            )
             view = create_spotify_view(album)
             await channel.send(content=ROLE_MENTION, embed=embed, view=view)
 
 @tasks.loop(minutes=10)
 async def check_youtube():
     global latest_youtube_video
-    channel_id = "UC2M3qP1SHMAOhrYThLwiJPw"
-    video = get_latest_video(channel_id)
+    video = get_latest_video(YOUTUBE_API_CHANNEL_ID)
     if not video:
         return
+    
     video_id = video["id"].get("videoId")
     if video_id and latest_youtube_video != video_id:
         latest_youtube_video = video_id
-        channel = bot.get_channel(YOUTUBE_ANNOUNCEMENT_CHANNEL_ID)
+        channel = bot.get_channel(YOUTUBE_CHANNEL_ID)
         if channel:
             embed = create_youtube_video_embed(video)
-            view = create_youtube_view(video)
-            await channel.send(content=ROLE_MENTION, embed=embed, view=view)
+            view = View()
+            view.add_item(Button(label="Watch on YouTube", url=f"https://www.youtube.com/watch?v={video_id}", style=discord.ButtonStyle.link))
+            await channel.send(embed=embed, view=view)
 
 # -------------------------
 # Bot Startup
@@ -234,14 +243,19 @@ async def on_ready():
     SPOTIFY_ACCESS_TOKEN = get_spotify_token()
     print(f"✅ Logged in as {bot.user}")
 
+    # Start background tasks
     check_new_releases.start()
     check_youtube.start()
+    
+    # Setup music system
     await setup_music(bot)
 
+    # Setup ticket system
     try:
         await setup_tickets(bot)
         print("✅ Ticket System is running")
     except Exception as e:
         print(f"❌ Ticket System failed to load: {e}")
 
+# Run the bot
 bot.run(DISCORD_TOKEN)

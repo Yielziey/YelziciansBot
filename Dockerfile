@@ -1,14 +1,29 @@
-# Gamitin ang official Python 3.12 image
-FROM python:3.12.7-slim
+# Use official Python image
+FROM python:3.12-slim
 
-# Gumawa ng working directory sa loob ng container
+# Set working directory
 WORKDIR /app
 
-# Kopyahin lahat ng project files papunta sa container
-COPY . .
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies mula sa requirements.txt
+# Copy requirements first (for caching)
+COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Command na magpapatakbo ng bot
+# Copy all bot files
+COPY . .
+
+# Set environment variable to flush stdout (optional but useful for logs)
+ENV PYTHONUNBUFFERED=1
+
+# Expose port if needed (e.g., for webhooks or health checks)
+EXPOSE 8080
+
+# Run the bot
 CMD ["python", "bot.py"]
