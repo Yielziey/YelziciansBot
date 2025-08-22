@@ -121,103 +121,45 @@ def create_youtube_video_embed(video):
     return embed
 
 # -------------------------
-# YouTube Music Helper (with ENV variable)
-# -------------------------
-async def fetch_latest_ytmusic_release():
-    global last_ytmusic_release
-
-    # Load YT Music channel ID from env
-    YTMUSIC_CHANNEL_ID = os.getenv("YTMUSIC_CHANNEL_ID")
-    if not YTMUSIC_CHANNEL_ID:
-        print("❌ Missing YTMUSIC_CHANNEL_ID in Railway Variables!")
-        return None
-
-    # Construct releases URL dynamically
-    YOUTUBE_RELEASES_URL = f"https://www.youtube.com/channel/{YTMUSIC_CHANNEL_ID}/releases"
-
-    class SilentLogger:
-        def debug(self, msg): pass
-        def warning(self, msg): pass
-        def error(self, msg): pass
-
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,
-        'ffmpeg_location': FFMPEG_PATH,
-        'logger': SilentLogger()
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(YOUTUBE_RELEASES_URL, download=False)
-    except Exception as e:
-        print(f"❌ Failed to fetch YTMusic releases: {e}")
-        return None
-
-    if not info or 'entries' not in info:
-        return None
-
-    for entry in info['entries']:
-        url = entry.get('url')
-        if not url:
-            continue
-        if not url.startswith("http"):
-            if 'list' in entry:
-                url = f"https://music.youtube.com/watch?v={entry['id']}&list={entry['list']}"
-            else:
-                url = f"https://music.youtube.com/watch?v={entry['id']}"
-
-        try:
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'logger': SilentLogger()}) as ydl_full:
-                full_info = ydl_full.extract_info(url, download=False)
-                title = full_info.get('title')
-        except Exception as e:
-            print(f"⚠️ Skipping release {entry.get('id')}, yt-dlp failed: {e}")
-            continue
-
-        artist = entry.get('channel') or entry.get('uploader') or "Unknown Artist"
-
-        if entry['id'] != last_ytmusic_release:
-            last_ytmusic_release = entry['id']
-            return url, title, artist
-
-    return None
-
-
-async def check_youtube_music_releases(bot):
-    channel = bot.get_channel(YTMUSIC_ANNOUNCEMENT_CHANNEL_ID)
-    if not channel:
-        print("⚠ Channel not found")
-        return
-
-    result = await fetch_latest_ytmusic_release()
-    if result:
-        release_url, title, artist = result
-        embed = discord.Embed(
-            title=f"🎶 New Release: {title}",
-            description=f"Artist: **{artist}**\n[▶️ Listen here]({release_url})",
-            color=discord.Color.purple()
-        )
-        embed.set_footer(
-            text="Powered by YouTube Music 🎧",
-            icon_url="https://cdn-icons-png.flaticon.com/512/1384/1384060.png"
-        )
-        await channel.send(content=ROLE_MENTION, embed=embed)
-        print(f"✅ Posted new release: {title} by {artist}")
-    else:
-        print("✅ No new release found")
-
-# -------------------------
 # Commands
 # -------------------------
+# --- Embed Creator Function
+def create_announcement_embed(message, attachments, announcement=True):
+    embed = discord.Embed(description=message, color=0x2ecc71)
+
+    if announcement:
+        embed.set_author(name="📢 Announcement")
+
+    # if there’s an attachment, use first as image
+    if attachments:
+        embed.set_image(url=attachments[0].url)
+
+    return embed
+
+
+# --- ANNOUNCE (with 📢 + mention)
+@bot.command(name="announce")
+async def announce(ctx, *, message):
+    if any(role.id in [MODERATOR_ROLE_ID, ARTIST_ROLE_ID, ADMIN_ROLE_ID] for role in ctx.author.roles):
+        for emoji in ctx.guild.emojis:
+            message = message.replace(f":{emoji.name}:", str(emoji))
+        embed = create_announcement_embed(message, ctx.message.attachments, announcement=True)
+        await ctx.send(content=ROLE_MENTION, embed=embed)
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            print("Bot cannot delete messages.")
+    else:
+        await ctx.send("⛔ You don't have permission to use this command.")
+
+# --- POST (same embed, no 📢, no mention)
 @bot.command(name="post")
 async def post(ctx, *, message):
     if any(role.id in [MODERATOR_ROLE_ID, ARTIST_ROLE_ID, ADMIN_ROLE_ID] for role in ctx.author.roles):
         for emoji in ctx.guild.emojis:
             message = message.replace(f":{emoji.name}:", str(emoji))
-        embed = create_announcement_embed(message, ctx.message.attachments)
-        await ctx.send(content=ROLE_MENTION, embed=embed)
+        embed = create_announcement_embed(message, ctx.message.attachments, announcement=False)
+        await ctx.send(embed=embed)  # no mention
         try:
             await ctx.message.delete()
         except discord.Forbidden:
@@ -339,35 +281,6 @@ async def check_youtube():
             embed = create_youtube_video_embed(video)
             await channel.send(content=ROLE_MENTION, embed=embed)
 
-@tasks.loop(minutes=10)
-async def check_youtube_music():
-    print("🔎 Checking for new YouTube Music releases...")
-    try:
-        release = await fetch_latest_ytmusic_release()
-        if release:
-            url, title, artist = release
-
-            # Gumamit na tayo ng channel ID galing ENV
-            channel_id = os.getenv("YTMUSIC_ANNOUNCEMENT_CHANNEL_ID")
-            if not channel_id:
-                print("❌ Missing YTMUSIC_ANNOUNCEMENT_CHANNEL_ID in Railway Variables!")
-                return
-
-            channel = bot.get_channel(int(channel_id))
-            if channel:
-                await channel.send(
-                    f"🎶 **New Release**: **{title}** by **{artist}**\n🔗 {url}"
-                )
-                print(f"✅ Posted new release: {title} by {artist} → {channel.name}")
-            else:
-                print(f"❌ Channel with ID {channel_id} not found. Check if bot has access.")
-        else:
-            print("ℹ️ No new releases found this time.")
-            print("👉 YTMUSIC_CHANNEL_ID =", os.getenv("YTMUSIC_CHANNEL_ID"))
-    except Exception as e:
-        print(f"❌ Error in check_youtube_music loop: {e}")
-
-
 DEFAULT_MEMBER_ROLE_ID = 1407630846294491168  # Member role
 WELCOME_CHANNEL_ID = 1407736229994430475   # Welcome channel
 
@@ -412,7 +325,6 @@ async def on_ready():
     # Start automated tasks
     check_new_releases.start()
     check_youtube.start()
-    check_youtube_music.start()
     print("✅ Background tasks started")
 
 # -------------------------
