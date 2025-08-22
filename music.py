@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord.ui import View, Button, slider
+from discord.ui import View, Button
 import asyncio
 import yt_dlp
 import os
