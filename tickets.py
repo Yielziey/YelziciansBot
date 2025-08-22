@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord.ui import View, Button
 import asyncio
 
@@ -123,10 +123,11 @@ class TicketSystem(commands.Cog):
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed, view=view)
-        await ctx.message.delete()
+        try: await ctx.message.delete()
+        except discord.Forbidden: pass
 
 # -------------------------
-# Cog Setup
+# Cog Setup (for hybrid)
 # -------------------------
 async def setup(bot):
     await bot.add_cog(TicketSystem(bot))
