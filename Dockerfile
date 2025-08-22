@@ -10,19 +10,17 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for caching)
+# Copy requirements and install Python packages
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all bot files
+# Copy bot files
 COPY . .
 
-# Set environment variable to flush stdout (optional but useful for logs)
-ENV PYTHONUNBUFFERED=1
+# Copy your cookies.txt (make sure it's valid Netscape format!)
+COPY cookies.txt ./cookies.txt
 
-# Expose port if needed (e.g., for webhooks or health checks)
+# Expose port (optional, if needed for web/health checks)
 EXPOSE 8080
 
 # Run the bot

@@ -9,7 +9,7 @@ from tickets import setup as setup_tickets
 from spotify import get_spotify_token, create_spotify_artist_embed, get_latest_albums, create_spotify_view
 from youtube import get_latest_video, create_youtube_video_embed
 from lyrics import fetch_lyrics, paginate_lyrics, LyricsPaginator, create_lyrics_embed
-from ai import ask_gpt, paginate_text, AIPaginator, create_ai_embed
+from ai import ask_gpt, paginate_text, create_ai_embed, AIPaginator
 from music import setup as setup_music
 
 # -------------------------
@@ -156,16 +156,11 @@ async def lyrics(ctx, *, query: str):
 # --- AI
 @bot.command(name="ask")
 async def ask(ctx, *, question):
-    async with ctx.typing():
-        answer = await ask_gpt(question)
-        print(f"AI response: {answer}")
-        if not answer.strip():
-            answer = "Sorry, I couldn't process that question."
-
-        pages = paginate_text(answer)
-        embed = create_ai_embed(question, pages[0], 1, len(pages))
-        view = AIPaginator(ctx, question, pages)
-        await ctx.send(embed=embed, view=view)
+    await ctx.defer()
+    answer = await ask_gpt(question)
+    pages = paginate_text(answer)
+    view = AIPaginator(ctx, question, pages)
+    await view.update_message()
 
 # --- Help
 @bot.command(name="help")
