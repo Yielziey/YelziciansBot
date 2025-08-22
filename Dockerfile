@@ -1,49 +1,56 @@
-# --------------------------
-# Base image
-# --------------------------
+# -------------------------
+# Base Image
+# -------------------------
 FROM python:3.12-slim
 
-# --------------------------
-# Environment variables
-# --------------------------
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    SPOTIPY_CLIENT_ID=your_spotify_client_id \
-    SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
+# -------------------------
+# Set environment variables
+# -------------------------
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-# --------------------------
-# Install system dependencies
-# --------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    wget \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# --------------------------
+# -------------------------
 # Set working directory
-# --------------------------
+# -------------------------
 WORKDIR /app
 
-# --------------------------
-# Copy files
-# --------------------------
-COPY requirements.txt .
-COPY . .
+# -------------------------
+# Install system dependencies
+# -------------------------
+RUN apt-get update && \
+    apt-get install -y ffmpeg curl git ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# --------------------------
+# -------------------------
 # Install Python dependencies
-# --------------------------
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# -------------------------
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# --------------------------
-# Expose port (not strictly needed for Discord bot)
-# --------------------------
-EXPOSE 8080
+# -------------------------
+# Copy bot code and cookies
+# -------------------------
+COPY . /app
+# Ensure you have cookies.txt in your project root
+# Railway allows secret files through Environment Variables if needed
 
-# --------------------------
-# Start the bot
-# --------------------------
+# -------------------------
+# Environment variables
+# -------------------------
+ENV DISCORD_TOKEN=""
+ENV SPOTIFY_CLIENT_ID=""
+ENV SPOTIFY_CLIENT_SECRET=""
+
+# -------------------------
+# Pre-fetch yt-dlp cookies (optional)
+# -------------------------
+# If you have a cookies.txt, ensure it's in the repo root.
+# This allows yt-dlp to bypass YouTube restrictions
+# You can also mount cookies via Railway environment secrets if preferred.
+
+# -------------------------
+# Run bot
+# -------------------------
 CMD ["python", "bot.py"]

@@ -35,25 +35,6 @@ class MusicPlayer:
         self.is_paused = False
         self.now_playing_msg = None
 
-    async def fetch_url(self, song):
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "quiet": True,
-            "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(song.url, download=False)
-            return info['url']
-
-    async def reconnect(self, channel):
-        """Attempt to reconnect to the voice channel"""
-        if self.voice:
-            try:
-                await self.voice.disconnect()
-            except:
-                pass
-        self.voice = await channel.connect()
-
     async def player_loop(self):
         while True:
             if not self.queue:
@@ -63,21 +44,31 @@ class MusicPlayer:
             self.current = self.queue.pop(0)
             channel = getattr(self.current.requester.author.voice, "channel", None)
             if not channel:
-                await self.current.requester.send("❌ You are not in a voice channel!")
+                await self.current.requester.send(f"❌ You are not in a voice channel!")
                 continue
 
             # Connect if not connected
             if not self.voice or not self.voice.is_connected():
-                await self.reconnect(channel)
+                self.voice = await channel.connect()
 
-            # Play the song with retry on URL error
-            retry = 2
-            while retry > 0:
+            # YDL options
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "quiet": True,
+                "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
+            }
+
+            # Attempt to play song, refresh URL on 403
+            for attempt in range(3):
                 try:
-                    url2 = await self.fetch_url(self.current)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(self.current.url, download=False)
+                        url2 = info['url']
+
                     source = discord.FFmpegPCMAudio(url2, options=f"-vn -filter:a volume={self.volume}")
                     self.voice.play(source, after=lambda e: self.play_next_event.set())
 
+                    # Send/Update Now Playing message with buttons
                     view = MusicControlView(self)
                     if self.now_playing_msg:
                         try:
@@ -88,25 +79,20 @@ class MusicPlayer:
                         self.now_playing_msg = await self.current.requester.send(f"▶️ Now Playing: **{self.current.title}**", view=view)
 
                     self.is_paused = False
-
-                    # Monitor the voice connection
-                    while self.voice.is_connected():
-                        await asyncio.sleep(1)
-                        if not self.voice.is_playing() and not self.is_paused:
-                            break
-                        if self.voice.is_playing() and self.voice._paused is False:
-                            continue
-                    self.play_next_event.set()
                     await self.play_next_event.wait()
                     self.play_next_event.clear()
                     break
 
-                except Exception as e:
-                    retry -= 1
-                    if retry <= 0:
-                        await self.current.requester.send(f"❌ Could not play {self.current.title}: {e}")
+                except yt_dlp.utils.DownloadError as e:
+                    if "403" in str(e):
+                        await self.current.requester.send(f"⚠️ URL expired, refreshing and retrying {self.current.title}...")
+                        continue
                     else:
-                        await asyncio.sleep(1)  # retry after short delay
+                        await self.current.requester.send(f"❌ Could not play {self.current.title}: {e}")
+                        break
+                except Exception as e:
+                    await self.current.requester.send(f"❌ Could not play {self.current.title}: {e}")
+                    break
 
 # -------------------------
 # Music Controls
@@ -191,7 +177,7 @@ async def setup(bot):
 
     @bot.command()
     async def qlist(ctx):
-        """Show upcoming songs (short)"""
+        """Show upcoming songs"""
         guild_id = ctx.guild.id
         player = players.get(guild_id)
         if not player or not player.queue:
