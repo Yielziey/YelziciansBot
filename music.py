@@ -7,11 +7,8 @@ import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
-# -------------------------
-# Globals
-# -------------------------
-queues = {}  # guild_id -> list of songs
-players = {}  # guild_id -> MusicPlayer per guild
+queues = {}      # guild_id -> list of Song
+players = {}     # guild_id -> MusicPlayer per guild
 
 # -------------------------
 # Song Object
@@ -36,14 +33,26 @@ class MusicPlayer:
         self.loop_task = bot.loop.create_task(self.player_loop())
         self.volume = 0.5
         self.is_paused = False
+        self.now_playing_msg = None
 
-        # YDL options
-        self.ydl_opts = {
+    async def fetch_url(self, song):
+        ydl_opts = {
             "format": "bestaudio/best",
             "quiet": True,
-            "nocheckcertificate": True,
             "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
         }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(song.url, download=False)
+            return info['url']
+
+    async def reconnect(self, channel):
+        """Attempt to reconnect to the voice channel"""
+        if self.voice:
+            try:
+                await self.voice.disconnect()
+            except:
+                pass
+        self.voice = await channel.connect()
 
     async def player_loop(self):
         while True:
@@ -57,98 +66,47 @@ class MusicPlayer:
                 await self.current.requester.send("❌ You are not in a voice channel!")
                 continue
 
+            # Connect if not connected
             if not self.voice or not self.voice.is_connected():
-                self.voice = await channel.connect()
+                await self.reconnect(channel)
 
-            try:
-                # Extract fresh URL every time
-                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                    info = ydl.extract_info(self.current.url, download=False)
-                    url2 = info['url']
+            # Play the song with retry on URL error
+            retry = 2
+            while retry > 0:
+                try:
+                    url2 = await self.fetch_url(self.current)
+                    source = discord.FFmpegPCMAudio(url2, options=f"-vn -filter:a volume={self.volume}")
+                    self.voice.play(source, after=lambda e: self.play_next_event.set())
 
-                source = discord.FFmpegPCMAudio(url2, options=f"-vn -filter:a volume={self.volume}")
-                self.voice.play(source, after=lambda e: self.play_next_event.set())
-                await self.current.requester.send(f"▶️ Now playing: **{self.current.title}**")
+                    view = MusicControlView(self)
+                    if self.now_playing_msg:
+                        try:
+                            await self.now_playing_msg.edit(content=f"▶️ Now Playing: **{self.current.title}**", view=view)
+                        except:
+                            self.now_playing_msg = await self.current.requester.send(f"▶️ Now Playing: **{self.current.title}**", view=view)
+                    else:
+                        self.now_playing_msg = await self.current.requester.send(f"▶️ Now Playing: **{self.current.title}**", view=view)
 
-                self.is_paused = False
-                await self.play_next_event.wait()
-                self.play_next_event.clear()
+                    self.is_paused = False
 
-            except Exception as e:
-                await self.current.requester.send(f"⚠ Could not play {self.current.title}, skipping... ({e})")
-                continue
+                    # Monitor the voice connection
+                    while self.voice.is_connected():
+                        await asyncio.sleep(1)
+                        if not self.voice.is_playing() and not self.is_paused:
+                            break
+                        if self.voice.is_playing() and self.voice._paused is False:
+                            continue
+                    self.play_next_event.set()
+                    await self.play_next_event.wait()
+                    self.play_next_event.clear()
+                    break
 
-# -------------------------
-# Bot Setup
-# -------------------------
-async def setup(bot):
-
-    # -------------------------
-    # Play Command
-    # -------------------------
-    @bot.command()
-    async def play(ctx, *, query):
-        """Play a song from YouTube or Spotify link"""
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if not player:
-            player = MusicPlayer(bot, ctx.guild)
-            players[guild_id] = player
-
-        # Spotify link handling
-        if "spotify.com" in query:
-            sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-                client_id=os.getenv("SPOTIFY_CLIENT_ID"),
-                client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
-            ))
-
-            if "track" in query:
-                track_id = query.split("/")[-1].split("?")[0]
-                track = sp.track(track_id)
-                query = f"{track['name']} {track['artists'][0]['name']}"
-            elif "playlist" in query:
-                playlist_id = query.split("/")[-1].split("?")[0]
-                playlist = sp.playlist_items(playlist_id)
-                for item in playlist['items']:
-                    track = item['track']
-                    youtube_query = f"{track['name']} {track['artists'][0]['name']}"
-                    player.queue.append(Song(track['name'], youtube_query, ctx))
-                await ctx.send(f"✅ Added **{len(playlist['items'])} tracks** to the queue.")
-                # Auto-show controls
-                view = MusicControlView(player)
-                await ctx.send("🎶 Music Controls", view=view)
-                return
-
-        player.queue.append(Song(query, query, ctx))
-        await ctx.send(f"✅ Added **{query}** to the queue.")
-        # Auto-show controls
-        view = MusicControlView(player)
-        await ctx.send("🎶 Music Controls", view=view)
-
-    # -------------------------
-    # Queue Commands
-    # -------------------------
-    @bot.command()
-    async def queuelist(ctx):
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if not player or not player.queue:
-            await ctx.send("Queue is empty.")
-            return
-        queue_text = "\n".join([f"{i+1}. {s.title}" for i, s in enumerate(player.queue)])
-        await ctx.send(f"🎵 Current Queue:\n{queue_text}")
-
-    @bot.command()
-    async def reset(ctx):
-        guild_id = ctx.guild.id
-        player = players.get(guild_id)
-        if player:
-            player.queue.clear()
-            if player.voice and player.voice.is_connected():
-                await player.voice.disconnect()
-            await ctx.send("✅ Queue cleared and disconnected from voice channel.")
-        else:
-            await ctx.send("Nothing to reset.")
+                except Exception as e:
+                    retry -= 1
+                    if retry <= 0:
+                        await self.current.requester.send(f"❌ Could not play {self.current.title}: {e}")
+                    else:
+                        await asyncio.sleep(1)  # retry after short delay
 
 # -------------------------
 # Music Controls
@@ -194,3 +152,63 @@ class MusicControlView(View):
     async def vol_down(self, interaction: discord.Interaction, button: Button):
         self.player.volume = max(self.player.volume - 0.1, 0.0)
         await interaction.response.send_message(f"🔉 Volume: {int(self.player.volume*100)}%", ephemeral=True)
+
+# -------------------------
+# Bot Setup
+# -------------------------
+async def setup(bot):
+    @bot.command()
+    async def play(ctx, *, query):
+        """Play a song from YouTube or Spotify"""
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player:
+            player = MusicPlayer(bot, ctx.guild)
+            players[guild_id] = player
+
+        # Spotify handling
+        if "spotify.com" in query:
+            sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+                client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+                client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
+            ))
+            if "track" in query:
+                track_id = query.split("/")[-1].split("?")[0]
+                track = sp.track(track_id)
+                query = f"{track['name']} {track['artists'][0]['name']}"
+            elif "playlist" in query:
+                playlist_id = query.split("/")[-1].split("?")[0]
+                playlist = sp.playlist_items(playlist_id)
+                for item in playlist['items']:
+                    track = item['track']
+                    youtube_query = f"{track['name']} {track['artists'][0]['name']}"
+                    player.queue.append(Song(track['name'], youtube_query, ctx))
+                await ctx.send(f"✅ Added **{len(playlist['items'])} tracks** to the queue.")
+                return
+
+        player.queue.append(Song(query, query, ctx))
+        await ctx.send(f"✅ Added **{query}** to the queue.")
+
+    @bot.command()
+    async def qlist(ctx):
+        """Show upcoming songs (short)"""
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player or not player.queue:
+            await ctx.send("No songs in the queue.")
+            return
+        embed = discord.Embed(title="🎶 Queue", description="\n".join([f"{i+1}. {song.title}" for i, song in enumerate(player.queue)]))
+        await ctx.send(embed=embed)
+
+    @bot.command()
+    async def reset(ctx):
+        """Stop and clear queue"""
+        guild_id = ctx.guild.id
+        player = players.get(guild_id)
+        if not player:
+            await ctx.send("No music player running.")
+            return
+        if player.voice:
+            await player.voice.disconnect()
+        player.queue.clear()
+        await ctx.send("✅ Music queue cleared and player stopped.")

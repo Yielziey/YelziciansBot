@@ -1,33 +1,49 @@
-# Use official Python 3.12 slim image
+# --------------------------
+# Base image
+# --------------------------
 FROM python:3.12-slim
 
-# Set environment variables
+# --------------------------
+# Environment variables
+# --------------------------
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    PATH="/root/.local/bin:$PATH"
+    PIP_NO_CACHE_DIR=1 \
+    SPOTIPY_CLIENT_ID=your_spotify_client_id \
+    SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
 
+# --------------------------
 # Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        curl \
-        git \
-        && apt-get clean && rm -rf /var/lib/apt/lists/*
+# --------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    wget \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
+# --------------------------
 # Set working directory
+# --------------------------
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# --------------------------
+# Copy files
+# --------------------------
 COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy all project files
 COPY . .
 
-# Expose port (Railway uses this)
+# --------------------------
+# Install Python dependencies
+# --------------------------
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# --------------------------
+# Expose port (not strictly needed for Discord bot)
+# --------------------------
 EXPOSE 8080
 
-# Command to run your bot
+# --------------------------
+# Start the bot
+# --------------------------
 CMD ["python", "bot.py"]
