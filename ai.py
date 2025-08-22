@@ -1,105 +1,97 @@
 # ai.py
+import os
 import discord
 from discord.ui import View, Button
-from discord.ext import commands
-from openai import OpenAI
+from discord import Embed
+import asyncio
 import math
+import openai
 
-import os
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Load API key from environment
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # -------------------------
-# AI Chat Function
+# AI Function
 # -------------------------
-async def ask_gpt(prompt: str) -> str:
+async def ask_gpt(question: str) -> str:
     """
-    Send prompt to OpenAI GPT model and return the assistant's response.
+    Sends a question to OpenAI ChatCompletion API and returns the answer.
     """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    # Extract content
-    return response.choices[0].message.content.strip()
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": question}],
+            temperature=0.7,
+            max_tokens=800
+        )
+        answer = response.choices[0].message.content
+        return answer.strip()
+    except Exception as e:
+        return f"❌ OpenAI API Error: {e}"
 
 # -------------------------
 # Pagination Helpers
 # -------------------------
-def paginate_text(text: str, page_size: int = 1500):
+def paginate_text(text: str, max_chars: int = 1000):
     """
-    Split text into pages of max page_size characters.
+    Split text into pages of maximum max_chars characters.
     """
     pages = []
-    for i in range(0, len(text), page_size):
-        pages.append(text[i:i+page_size])
+    lines = text.split("\n")
+    current_page = ""
+    
+    for line in lines:
+        if len(current_page) + len(line) + 1 > max_chars:
+            pages.append(current_page)
+            current_page = line + "\n"
+        else:
+            current_page += line + "\n"
+    
+    if current_page:
+        pages.append(current_page)
+    
     return pages
 
-def create_ai_embed(question: str, answer: str, page: int, total_pages: int) -> discord.Embed:
-    embed = discord.Embed(
-        title="🤖 AI Answer",
-        description=answer,
-        color=discord.Color.purple()
-    )
-    embed.set_footer(text=f"Q: {question} | Page {page}/{total_pages}")
+# -------------------------
+# Embed Creator
+# -------------------------
+def create_ai_embed(question: str, page_text: str, page_num: int, total_pages: int):
+    embed = Embed(title="🤖 AI Answer", description=page_text, color=discord.Color.blurple())
+    embed.set_footer(text=f"Q: {question} | Page {page_num}/{total_pages}")
     return embed
 
 # -------------------------
-# Paginator View
+# Paginator Class
 # -------------------------
 class AIPaginator(View):
-    def __init__(self, ctx: commands.Context, question: str, pages: list[str]):
-        super().__init__(timeout=None)
+    def __init__(self, ctx, question: str, pages: list[str]):
+        super().__init__(timeout=300)
         self.ctx = ctx
         self.question = question
         self.pages = pages
-        self.current_page = 0
-        self.message = None
+        self.current = 0
+        self.total = len(pages)
 
-        # Add buttons
-        self.add_item(Button(label="⏮️ Prev", style=discord.ButtonStyle.primary))
-        self.add_item(Button(label="⏭️ Next", style=discord.ButtonStyle.primary))
-        self.add_item(Button(label="Regenerate 🔄", style=discord.ButtonStyle.success))
+        # Buttons
+        self.add_item(Button(label="◀️ Prev", style=discord.ButtonStyle.primary, custom_id="prev"))
+        self.add_item(Button(label="▶️ Next", style=discord.ButtonStyle.primary, custom_id="next"))
 
-        # Assign callbacks
-        self.children[0].callback = self.prev_page
-        self.children[1].callback = self.next_page
-        self.children[2].callback = self.regenerate
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Only allow the command invoker to use the buttons
+        return interaction.user.id == self.ctx.author.id
+
+    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary)
+    async def prev_button(self, interaction: discord.Interaction, button: Button):
+        self.current = max(self.current - 1, 0)
+        embed = create_ai_embed(self.question, self.pages[self.current], self.current + 1, self.total)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="▶️ Next", style=discord.ButtonStyle.primary)
+    async def next_button(self, interaction: discord.Interaction, button: Button):
+        self.current = min(self.current + 1, self.total - 1)
+        embed = create_ai_embed(self.question, self.pages[self.current], self.current + 1, self.total)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def update_message(self):
-        embed = create_ai_embed(
-            self.question,
-            self.pages[self.current_page],
-            self.current_page + 1,
-            len(self.pages)
-        )
-        if self.message:
-            await self.message.edit(embed=embed, view=self)
-        else:
-            self.message = await self.ctx.send(embed=embed, view=self)
-
-    async def prev_page(self, interaction: discord.Interaction):
-        self.current_page = (self.current_page - 1) % len(self.pages)
-        await interaction.response.edit_message(embed=create_ai_embed(
-            self.question,
-            self.pages[self.current_page],
-            self.current_page + 1,
-            len(self.pages)
-        ), view=self)
-
-    async def next_page(self, interaction: discord.Interaction):
-        self.current_page = (self.current_page + 1) % len(self.pages)
-        await interaction.response.edit_message(embed=create_ai_embed(
-            self.question,
-            self.pages[self.current_page],
-            self.current_page + 1,
-            len(self.pages)
-        ), view=self)
-
-    async def regenerate(self, interaction: discord.Interaction):
-        await interaction.response.defer()  # Acknowledge button press
-        new_answer = await ask_gpt(self.question)
-        self.pages = paginate_text(new_answer)
-        self.current_page = 0
-        await self.update_message()
+        embed = create_ai_embed(self.question, self.pages[self.current], self.current + 1, self.total)
+        await self.ctx.send(embed=embed, view=self)

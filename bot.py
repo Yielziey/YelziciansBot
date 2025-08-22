@@ -157,11 +157,12 @@ async def lyrics(ctx, *, query: str):
 @bot.command(name="ask")
 async def ask(ctx, *, question):
     await ctx.defer()
+    from ai import ask_gpt, paginate_text, create_ai_embed, AIPaginator
+
     answer = await ask_gpt(question)
     pages = paginate_text(answer)
     view = AIPaginator(ctx, question, pages)
     await view.update_message()
-
 # --- Help
 @bot.command(name="help")
 async def help_command(ctx):
