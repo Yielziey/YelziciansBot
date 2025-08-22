@@ -1,12 +1,13 @@
 import requests
-from discord import Embed
+import discord
+from discord.ui import View, Button
+import os
 
-SPOTIFY_ARTIST_ID = "6rhenHsRHjPnQIcawW67VQ"  # Default artist for auto release (change if needed)
+SPOTIFY_ARTIST_ID = "6rhenHsRHjPnQIcawW67VQ"  # Default artist for auto release
 
 def get_spotify_token():
-    from os import getenv
-    SPOTIFY_CLIENT_ID = getenv("SPOTIFY_CLIENT_ID")
-    SPOTIFY_CLIENT_SECRET = getenv("SPOTIFY_CLIENT_SECRET")
+    SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+    SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
     url = "https://accounts.spotify.com/api/token"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
@@ -22,7 +23,6 @@ def get_latest_albums(artist_id, token, limit=5):
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"include_groups": "album,single", "limit": limit*2, "market": "US"}
-
     response = requests.get(url, headers=headers, params=params)
     albums_data = response.json().get("items", [])
     latest_albums = []
@@ -31,7 +31,6 @@ def get_latest_albums(artist_id, token, limit=5):
         album_url = f"https://api.spotify.com/v1/albums/{album['id']}"
         album_res = requests.get(album_url, headers=headers).json()
         track_count = album_res.get("total_tracks", 0)
-
         if track_count >= 3:
             album_name = album["name"]
             album_link = album["external_urls"]["spotify"]
@@ -44,7 +43,7 @@ def get_latest_albums(artist_id, token, limit=5):
 
 def create_spotify_artist_embed(artist_data, top_tracks, latest_albums):
     from bot import ROLE_MENTION
-    embed = Embed(
+    embed = discord.Embed(
         title=artist_data.get("name", "Artist"),
         url=artist_data.get("external_urls", {}).get("spotify"),
         description=f"{ROLE_MENTION}\n🎵 Discover this artist on Spotify!",
@@ -68,3 +67,12 @@ def get_artist_latest_album(token):
     if res.get("items"):
         return res["items"][0]
     return None
+
+
+def create_spotify_view(artist_data):
+    """Create Discord UI View with Open in Spotify button"""
+    view = View()
+    spotify_url = artist_data.get("external_urls", {}).get("spotify")
+    if spotify_url:
+        view.add_item(Button(label="Open in Spotify", url=spotify_url, style=discord.ButtonStyle.link))
+    return view
